@@ -1,9 +1,8 @@
 """
 Read contacts from Excel, fill {{COMPANY_NAME}} in a text email template, send via Gmail SMTP.
 
-Excel: company name + recipient email. Recognized headers (case-insensitive, extra spaces OK):
-  Email: Email, E-mail, EmailID, Email ID, Mail, Recipient, To
-  Company: Company, Company Name, Comapany Name (common typo), Organization, Business
+Excel: company name, recipient email, optional Website, and a Status column (header: Status). Recognized headers
+  (case-insensitive): Email / EmailID, Company / Comapany Name, Status / Sent / etc.
 
 If row 1 is a title and row 2 has headers (like your sheet), use auto-detect (default) or --header-row 1.
 
@@ -21,8 +20,9 @@ By default attaches Nehal_Ingole_7397966719.pdf from the same folder as this scr
 By default only the first 50 sheet rows (in file order) are processed. Use --no-limit for the full list
   or e.g. --limit 100 to change the cap.
 
-After a row's email(s) send successfully, writes Done to the status column (column D by default). Use
-  --no-mark-done to skip updating the workbook. --done-column E to pick another column letter.
+After a row's email(s) send successfully, writes Done to the status column (column D by default). Rows that
+  already have Done in that column are skipped (no email). Use --no-mark-done to skip updating the workbook.
+  --done-column E to pick another column letter.
 """
 
 from __future__ import annotations
@@ -141,6 +141,23 @@ def write_done_to_sheet(excel_path: Path, row_1based: int, col_letter: str, valu
     ws = wb.active
     ws.cell(row=row_1based, column=col_idx, value=value)
     wb.save(excel_path)
+
+
+def resolve_status_read_column(df: pd.DataFrame, done_col_letter: str) -> str | None:
+    """Pandas column name for the status cell (same letter as Done writes). None if out of range."""
+    idx = column_index_from_string(done_col_letter.strip().upper()) - 1
+    if 0 <= idx < len(df.columns):
+        return df.columns[idx]
+    return None
+
+
+def row_status_is_done(row: pd.Series, status_col: str | None) -> bool:
+    if status_col is None:
+        return False
+    val = row[status_col]
+    if pd.isna(val):
+        return False
+    return str(val).strip().lower() == "done"
 
 
 def load_contacts(path: Path, header_row: int | None) -> tuple[pd.DataFrame, int]:
@@ -318,9 +335,22 @@ def main() -> None:
         print(f"Row cap: disabled (--no-limit); processing all {len(df)} data row(s).")
 
     done_col_letter = resolve_done_column_letter(df, args.done_column)
+    status_read_col = resolve_status_read_column(df, done_col_letter)
     mark_done = not args.no_mark_done
+    if status_read_col is not None:
+        print(
+            f"Status column: {status_read_col!r} (sheet column {done_col_letter}) — "
+            "rows already marked Done will be skipped."
+        )
+    else:
+        print("Note: could not map status column; not skipping pre-marked rows.")
     if mark_done:
-        print(f"Will write 'Done' to column {done_col_letter} after each fully successful row (use --no-mark-done to disable).")
+        print(
+            f"Will write 'Done' to column {done_col_letter} after each fully successful row "
+            "(use --no-mark-done to disable writing)."
+        )
+    elif status_read_col is not None:
+        print("Will not write to Excel (--no-mark-done); still skipping rows already marked Done.")
 
     if not args.dry_run:
         if not sender or not app_password:
@@ -338,6 +368,9 @@ def main() -> None:
         excel_row_1based = header_used + 2 + pos
         if not company or company.lower() == "nan":
             print(f"Sheet ~row {excel_row_1based}: skip — empty company name")
+            continue
+        if row_status_is_done(row, status_read_col):
+            print(f"Sheet ~row {excel_row_1based}: skip — status already Done ({company!r})")
             continue
         addresses = parse_recipient_emails(to_raw)
         if not addresses:
