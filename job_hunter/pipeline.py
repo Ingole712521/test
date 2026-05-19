@@ -7,7 +7,13 @@ from pathlib import Path
 import pandas as pd
 
 from job_hunter.emails import extract_emails_from_url
-from job_hunter.search import JobListing, SearchConfig, search_all_jobs, search_career_pages
+from job_hunter.search import (
+    JobListing,
+    SearchConfig,
+    search_all_jobs,
+    search_career_pages,
+    search_hr_emails_google,
+)
 
 
 @dataclass
@@ -45,6 +51,10 @@ def find_emails_for_company(company: str, job: JobListing) -> tuple[list[str], s
                 emails.append(e)
         if emails:
             career_url = job.job_url
+
+    for e in search_hr_emails_google(company, max_results=8):
+        if e not in emails:
+            emails.append(e)
 
     urls = search_career_pages(company, max_results=6)
     for url in urls:
@@ -137,6 +147,19 @@ def run_pipeline(cfg: PipelineConfig) -> list[ContactRow]:
             time.sleep(cfg.delay_seconds)
 
     return rows
+
+
+def write_excel_simple(rows: list[ContactRow], path: Path) -> None:
+    """Write company, email, and role only (user-facing simple format)."""
+    data = {
+        "Company Name": [r.company for r in rows],
+        "Email ID": [r.email for r in rows],
+        "Role": [r.job_title or r.role_searched for r in rows],
+    }
+    df = pd.DataFrame(data)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_excel(path, index=False)
+    print(f"\nWrote {len(rows)} row(s) to {path.resolve()}")
 
 
 def write_excel(rows: list[ContactRow], path: Path) -> None:

@@ -20,7 +20,6 @@ BLOCKED_LOCAL = {
     "webmaster",
     "support",
     "help",
-    "info",
     "newsletter",
     "marketing",
     "sales",
@@ -74,6 +73,8 @@ PREFERRED_LOCAL = (
     "people",
     "humanresources",
     "human.resources",
+    "contact",
+    "info",
 )
 
 USER_AGENT = (

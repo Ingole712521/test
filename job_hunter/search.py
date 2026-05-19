@@ -12,7 +12,7 @@ from job_hunter.experience import experience_query_suffix, text_matches_experien
 JOB_SITES: dict[str, str] = {
     "naukri": "site:naukri.com",
     "indeed": "site:indeed.com/viewjob OR site:in.indeed.com/viewjob",
-    "linkedin": "site:linkedin.com/jobs",
+    "linkedin": "site:linkedin.com/jobs/view",
     "glassdoor": "site:glassdoor.co.in OR site:glassdoor.com/job",
     "foundit": "site:foundit.in OR site:monsterindia.com",
     "reddit": "site:reddit.com",
@@ -63,6 +63,11 @@ HIRING_TITLE = re.compile(
     r"^(.+?)\s+is\s+hiring\s+(.+?)(?:\s+job\s+in\s+|\s+in\s+)(.+?)(?:\s*\||\s*-|$)",
     re.IGNORECASE,
 )
+# LinkedIn: "Acme hiring DevOps Engineer in Bangalore, Karnataka, India | LinkedIn"
+LINKEDIN_HIRING = re.compile(
+    r"^(.+?)\s+hiring\s+(.+?)\s+in\s+(.+?)(?:\s*\|\s*LinkedIn)?$",
+    re.IGNORECASE,
+)
 AT_TITLE = re.compile(r"^(.+?)\s+at\s+(.+?)(?:\s*\||\s*-|$)", re.IGNORECASE)
 DASH_TITLE = re.compile(r"^(.+?)\s+-\s+(.+?)(?:\s*\||\s*-|$)")
 
@@ -70,7 +75,13 @@ ROLE_KEYWORDS: dict[str, re.Pattern] = {
     "react": re.compile(r"\b(react\.?js|react\s+js|react\s+developer|frontend)\b", re.I),
     "devops": re.compile(
         r"\b(devops|dev\s*ops|sre|site\s+reliability|platform\s+engineer|"
-        r"cloud\s+engineer|infrastructure\s+engineer)\b",
+        r"cloud\s+engineer|infrastructure\s+engineer|junior\s+devops|"
+        r"mid[\s-]?level\s+devops)\b",
+        re.I,
+    ),
+    "aws": re.compile(
+        r"\b(aws|amazon\s+web\s+services|cloud\s+aws|aws\s+devops|"
+        r"aws\s+engineer|aws\s+cloud)\b",
         re.I,
     ),
 }
@@ -129,6 +140,10 @@ def _role_matches_search(role_searched: str, job_title: str, snippet: str) -> bo
     blob = f"{role_searched} {job_title} {snippet}".lower()
     if "react" in role_searched.lower():
         return bool(ROLE_KEYWORDS["react"].search(blob))
+    if "aws" in role_searched.lower():
+        return bool(ROLE_KEYWORDS["aws"].search(blob)) or bool(
+            ROLE_KEYWORDS["devops"].search(blob)
+        )
     if "devops" in role_searched.lower():
         return bool(ROLE_KEYWORDS["devops"].search(blob))
     return role_searched.lower() in blob
@@ -150,13 +165,29 @@ def _parse_listing(
     if m:
         company, job_title, location = m.group(1).strip(), m.group(2).strip(), m.group(3).strip()
     else:
+        m = LINKEDIN_HIRING.match(title)
+        if m:
+            company, job_title, location = (
+                m.group(1).strip(),
+                m.group(2).strip(),
+                m.group(3).strip(),
+            )
+    if not company:
         m = AT_TITLE.match(title)
         if m:
             job_title, company = m.group(1).strip(), m.group(2).strip()
-        else:
+        elif not company:
             m = DASH_TITLE.match(title)
             if m:
                 company, job_title = m.group(1).strip(), m.group(2).strip()
+
+    if not company and "/jobs/view/" in url.lower():
+        slug = urlparse(url).path.rstrip("/").split("/")[-1]
+        # e.g. devops-engineer-aws-at-lightcast-3497728904
+        if "-at-" in slug:
+            parts = slug.rsplit("-at-", 1)
+            job_title = parts[0].replace("-", " ").title()
+            company = parts[1].rsplit("-", 1)[0].replace("-", " ").title()
 
     if not company:
         host = urlparse(url).netloc.replace("www.", "")
@@ -254,7 +285,11 @@ def search_jobs_on_site(
         if not url or url in seen_urls:
             continue
         url_l = url.lower()
-        if any(bad in url_l for bad in BAD_URL_FRAGMENTS):
+        if "linkedin.com/jobs/view" not in url_l and any(
+            bad in url_l for bad in BAD_URL_FRAGMENTS
+        ):
+            continue
+        if "linkedin.com/jobs" in url_l and "/jobs/view/" not in url_l:
             continue
 
         combined_text = f"{title} {body}"
@@ -298,6 +333,54 @@ def search_all_jobs(cfg: SearchConfig) -> list[JobListing]:
                 all_jobs.append(job)
 
     return all_jobs
+
+
+def search_hr_emails_google(company: str, max_results: int = 8) -> list[str]:
+    """Find HR/careers/recruitment emails via web search snippets and linked pages."""
+    from job_hunter.emails import extract_emails_from_text, extract_emails_from_url
+
+    queries = [
+        f'"{company}" HR email careers recruitment hiring contact',
+        f'"{company}" "careers@" OR "hr@" OR "jobs@" OR "recruitment@" email',
+    ]
+    emails: list[str] = []
+    seen: set[str] = set()
+    try:
+        with DDGS() as ddgs:
+            for query in queries:
+                try:
+                    results = list(ddgs.text(query, max_results=max_results))
+                except Exception:
+                    continue
+                for r in results:
+                    blob = f"{r.get('title', '')} {r.get('body', '')}"
+                    for e in extract_emails_from_text(blob):
+                        if e.lower() not in seen:
+                            seen.add(e.lower())
+                            emails.append(e)
+                    url = (r.get("href") or "").strip()
+                    if url.startswith("http"):
+                        host = urlparse(url).netloc.lower()
+                        if any(
+                            s in host
+                            for s in (
+                                "linkedin.com",
+                                "facebook.com",
+                                "twitter.com",
+                                "indeed.com",
+                                "naukri.com",
+                            )
+                        ):
+                            continue
+                        for e in extract_emails_from_url(url):
+                            if e.lower() not in seen:
+                                seen.add(e.lower())
+                                emails.append(e)
+                if len(emails) >= 3:
+                    break
+    except Exception:
+        return emails
+    return emails
 
 
 def search_career_pages(company: str, max_results: int = 5) -> list[str]:

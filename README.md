@@ -31,6 +31,14 @@ Searches these sources (via web search, no login):
 | `weworkremotely` | We Work Remotely |
 | `remoteco` | Remote.co |
 
+**LinkedIn AWS / DevOps only** (company, email, role columns):
+
+```bash
+python linkedin_devops_jobs.py
+```
+
+Searches LinkedIn job postings (public listings via web search), then finds HR/career emails on company sites and Google. Output: `Company_email.xlsx` with **Company Name**, **Email ID**, **Role**.
+
 **Default run** (React + DevOps, 1–4 years experience, India, all sites above):
 
 ```bash
@@ -61,6 +69,25 @@ Options:
 **Excel columns:** Comapany Name, EmailID, Website, Job Title, Job URL, Career Page, Source, Location, Status.
 
 Rows without a public email show `NO email id` (same as your existing sheet). Not every company publishes HR email on the web.
+
+## Fill emails from your own Excel (web scraper)
+
+If you already have a list of **company names** in Excel and need **HR / careers / contact / info** emails:
+
+```bash
+python scrape_emails_from_excel.py --excel Company_email.xlsx --only-missing
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--excel` | `Company_email.xlsx` | Input file (updated in place unless `--output` is set) |
+| `--only-missing` | off | Skip rows that already have a valid email |
+| `--limit` | all rows | Max companies to look up |
+| `--delay` | `1.5` | Pause between companies (seconds) |
+| `--max-emails` | `3` | Emails per company (comma-separated in one cell) |
+| `--output` | — | Write to another file instead of overwriting |
+
+Required columns: **Company Name** (or `Comapany Name`) and **Email ID** (optional **Website** column for faster lookups).
 
 ## Step 2 — Send emails (existing script)
 
