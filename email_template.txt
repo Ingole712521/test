@@ -1,19 +1,20 @@
-SUBJECT: Application — interest in opportunities at {{COMPANY_NAME}}
+SUBJECT: Application — interest in DevOps opportunities at {{COMPANY_NAME}}
 
 Dear Hiring Manager,
 
-I am writing to express my interest in opportunities at {{COMPANY_NAME}}. I have 1.5 years of hands-on experience in frontend development using React.js, TypeScript, and JavaScript, along with practical exposure to DevOps and cloud technologies including AWS, Docker, Kubernetes, and CI/CD pipelines.
+I am writing to express my interest in DevOps opportunities at {{COMPANY_NAME}}. I have 1.5 years of hands-on experience in DevOps and cloud technologies, including AWS, Docker, Kubernetes, and CI/CD pipelines, along with a strong foundation in software development using React.js, TypeScript, and JavaScript.
 
-In my current role, I develop and maintain scalable web applications, build reusable UI components, and integrate APIs to improve application performance and user experience. I have also worked on cloud infrastructure setup, deployment automation, containerization, and modern DevOps workflows.
+In my current role, I have actively worked on cloud infrastructure setup, deployment automation, containerization, and modern DevOps workflows. I have built and maintained CI/CD pipelines, managed containerized applications using Docker and Kubernetes, and worked on AWS services to improve deployment efficiency and system reliability.
 
-Additionally, I have experience collaborating with development teams, improving deployment workflows, and working on scalable architectures that support efficient and reliable application development and operations.
+My frontend development experience has also helped me collaborate effectively with development teams, understand application lifecycle needs, and optimize build and deployment processes for better performance and scalability.
 
-Apart from my professional experience, I am currently building AnimioUI, a reusable UI component library, and actively contributing to open-source projects on GitHub. These experiences have strengthened my technical expertise, collaboration, and problem-solving abilities. You can explore the library here: https://www.animioui.in/
+Apart from my professional experience, I am currently building AnimioUI, a reusable UI component library, and contributing to open-source projects on GitHub. These have sharpened my automation thinking, version control practices, and problem-solving skills — all essential for DevOps roles.
 
 You can view my work here:
 Portfolio: https://nehalingole.in/
+Component Library: https://www.animioui.in/
 
-I have attached my resume for your review and would welcome the opportunity to discuss how I can contribute to your team at {{COMPANY_NAME}}.
+I have attached my resume for your review and would welcome the opportunity to discuss how I can contribute to your DevOps team at {{COMPANY_NAME}}.
 
 Thank you for your time and consideration. I look forward to hearing from you.
 
