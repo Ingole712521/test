@@ -14,7 +14,40 @@ copy .env.example .env
 
 Edit `.env` with your Gmail address and [App Password](https://myaccount.google.com/apppasswords) for step 2.
 
-## Step 1 — Search jobs and extract emails
+## Step 1 — Remote jobs with Scrapy (recommended for remote boards)
+
+Uses **Scrapy** to crawl remote job sites, then finds each company's career / HR / info email and writes Excel.
+
+**Boards:** Indeed, Naukri (remote), RemoteOK, Remotive, We Work Remotely, remote.co, NoDesk, Working Nomads.
+
+```bash
+python remote_job_scraper.py
+```
+
+Scrape + find emails + send mail in one command:
+
+```bash
+python remote_job_scraper.py --roles "DevOps Engineer,React Developer" --limit 30 --send --template email_template.txt
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--roles` | React Developer, DevOps Engineer | Comma-separated job titles |
+| `--sites` | all remote boards above | Comma-separated site keys |
+| `--limit` | `50` | Max companies to look up for emails |
+| `--results-per-site` | `25` | Max jobs per board per role |
+| `--experience-min` / `--experience-max` | `1` / `4` | Experience filter |
+| `--output` | `Company_email.xlsx` | Output Excel |
+| `--send` | off | Run `send_mail_merge.py` after Excel is ready |
+| `--dry-run` | off | Scrape only; print jobs, skip email lookup |
+
+Then (if you did not use `--send`):
+
+```bash
+python send_mail_merge.py --excel Company_email.xlsx --template email_template.txt
+```
+
+## Step 1 (alternate) — Search jobs and extract emails
 
 Searches these sources (via web search, no login):
 
@@ -102,6 +135,13 @@ python send_mail_merge.py --excel Company_email.xlsx --template email_template.t
 ```
 
 Template uses `{{COMPANY_NAME}}` in subject/body. See `email_template.txt`.
+
+After each send, the script waits **3 seconds** (default) and checks Gmail via IMAP for a **Mail Delivery Subsystem** bounce for that address. If one arrives, it **deletes the bounce message** and **removes that company row** from the Excel file (company name + email). Enable **IMAP** on your Gmail account (same app password as SMTP).
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--bounce-wait` | `3` | Seconds to wait before checking for a bounce |
+| `--no-bounce-check` | off | Skip bounce detection and row removal |
 
 ## Notes
 

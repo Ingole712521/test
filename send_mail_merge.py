@@ -23,17 +23,25 @@ By default only the first 50 sheet rows (in file order) are processed. Use --no-
 After a row's email(s) send successfully, writes Done to the status column (column D by default). Rows that
   already have Done in that column are skipped (no email). Use --no-mark-done to skip updating the workbook.
   --done-column E to pick another column letter.
+
+After each send, waits a few seconds (default 3) and checks Gmail (IMAP) for a bounce from Mail Delivery
+  Subsystem / mailer-daemon mentioning that recipient. If found, deletes the bounce message and removes the
+  company row from the Excel file (does not mark Done). Requires IMAP enabled on the Gmail account.
 """
 
 from __future__ import annotations
 
 import argparse
+import email
+import imaplib
 import os
 import re
 import smtplib
 import ssl
 import time
+from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 
 import pandas as pd
@@ -141,6 +149,153 @@ def write_done_to_sheet(excel_path: Path, row_1based: int, col_letter: str, valu
     ws = wb.active
     ws.cell(row=row_1based, column=col_idx, value=value)
     wb.save(excel_path)
+
+
+def remove_rows_from_sheet_bottom_up(excel_path: Path, rows_1based: list[int]) -> None:
+    if not rows_1based:
+        return
+    wb = load_workbook(excel_path)
+    ws = wb.active
+    for row in sorted(set(rows_1based), reverse=True):
+        if row >= 1:
+            ws.delete_rows(row, 1)
+    wb.save(excel_path)
+
+
+_BOUNCE_FROM_RE = re.compile(
+    r"mail\s*delivery\s*subsystem|mailer[-_]?daemon|postmaster",
+    re.IGNORECASE,
+)
+_BOUNCE_SUBJECT_RE = re.compile(
+    r"delivery\s+status|undelivered|delivery\s+failure|returned\s+to\s+sender|"
+    r"address\s+not\s+found|user\s+unknown|mailbox\s+not\s+found|"
+    r"message\s+rejected|delivery\s+has\s+failed",
+    re.IGNORECASE,
+)
+
+
+def _decode_header_value(raw: str | None) -> str:
+    if not raw:
+        return ""
+    parts: list[str] = []
+    for chunk, enc in email.header.decode_header(raw):
+        if isinstance(chunk, bytes):
+            parts.append(chunk.decode(enc or "utf-8", errors="replace"))
+        else:
+            parts.append(str(chunk))
+    return " ".join(parts)
+
+
+def _message_text(msg: email.message.Message) -> str:
+    chunks: list[str] = []
+    if msg.is_multipart():
+        for part in msg.walk():
+            if part.get_content_maintype() == "multipart":
+                continue
+            if part.get_content_type() not in ("text/plain", "text/html"):
+                continue
+            payload = part.get_payload(decode=True)
+            if not payload:
+                continue
+            charset = part.get_content_charset() or "utf-8"
+            chunks.append(payload.decode(charset, errors="replace"))
+    else:
+        payload = msg.get_payload(decode=True)
+        if payload:
+            charset = msg.get_content_charset() or "utf-8"
+            chunks.append(payload.decode(charset, errors="replace"))
+    return "\n".join(chunks)
+
+
+def _looks_like_bounce(msg: email.message.Message, recipient: str) -> bool:
+    from_hdr = _decode_header_value(msg.get("From"))
+    subject = _decode_header_value(msg.get("Subject"))
+    if not _BOUNCE_FROM_RE.search(from_hdr) and not _BOUNCE_SUBJECT_RE.search(subject):
+        return False
+    recip = recipient.strip().lower()
+    if not recip:
+        return False
+    blob = f"{from_hdr}\n{subject}\n{_message_text(msg)}".lower()
+    return recip in blob
+
+
+def _imap_connect(gmail_user: str, app_password: str) -> imaplib.IMAP4_SSL:
+    mail = imaplib.IMAP4_SSL("imap.gmail.com")
+    mail.login(gmail_user, app_password.replace(" ", ""))
+    return mail
+
+
+def find_and_delete_bounce(
+    gmail_user: str,
+    app_password: str,
+    recipient: str,
+    wait_seconds: float,
+    not_before: datetime,
+) -> bool:
+    """
+    Wait, then search INBOX for a recent Mail Delivery Subsystem bounce for ``recipient``.
+    Deletes matching message(s). Returns True if a bounce was found.
+    """
+    if wait_seconds > 0:
+        time.sleep(wait_seconds)
+
+    mail = _imap_connect(gmail_user, app_password)
+    try:
+        status, _ = mail.select("INBOX")
+        if status != "OK":
+            return False
+
+        # Gmail-specific search: recent daemon / failure notices
+        status, data = mail.uid(
+            "search",
+            None,
+            "X-GM-RAW",
+            'from:mailer-daemon OR from:"Mail Delivery Subsystem" newer_than:1d',
+        )
+        if status != "OK" or not data or not data[0]:
+            return False
+
+        uids = data[0].split()
+        cutoff = not_before - timedelta(seconds=30)
+        deleted = False
+
+        for uid in reversed(uids[-40:]):  # newest candidates first, cap volume
+            status, fetched = mail.uid("fetch", uid, "(RFC822 INTERNALDATE)")
+            if status != "OK" or not fetched or not fetched[0]:
+                continue
+            item = fetched[0]
+            if isinstance(item, tuple) and len(item) >= 2:
+                raw = item[1]
+            elif isinstance(item, (bytes, bytearray)):
+                raw = item
+            else:
+                continue
+            if not isinstance(raw, (bytes, bytearray)):
+                continue
+            msg = email.message_from_bytes(bytes(raw))
+            msg_date = msg.get("Date")
+            if msg_date:
+                try:
+                    dt = parsedate_to_datetime(msg_date)
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    if dt < cutoff:
+                        continue
+                except (TypeError, ValueError, OverflowError):
+                    pass
+            if not _looks_like_bounce(msg, recipient):
+                continue
+            mail.uid("STORE", uid, "+FLAGS", "\\Deleted")
+            deleted = True
+
+        if deleted:
+            mail.expunge()
+        return deleted
+    finally:
+        try:
+            mail.logout()
+        except imaplib.IMAP4.error:
+            pass
 
 
 def resolve_status_read_column(df: pd.DataFrame, done_col_letter: str) -> str | None:
@@ -279,6 +434,18 @@ def main() -> None:
         action="store_true",
         help="Do not update the Excel file after sends",
     )
+    parser.add_argument(
+        "--bounce-wait",
+        type=float,
+        default=3.0,
+        metavar="SEC",
+        help="Seconds to wait after each send before checking Gmail for a delivery failure (default: 3)",
+    )
+    parser.add_argument(
+        "--no-bounce-check",
+        action="store_true",
+        help="Do not check Gmail for Mail Delivery Subsystem bounces after sending",
+    )
     args = parser.parse_args()
 
     script_dir = Path(__file__).resolve().parent
@@ -352,6 +519,15 @@ def main() -> None:
     elif status_read_col is not None:
         print("Will not write to Excel (--no-mark-done); still skipping rows already marked Done.")
 
+    bounce_check = not args.no_bounce_check and args.bounce_wait > 0
+    if bounce_check:
+        print(
+            f"After each send, will wait {args.bounce_wait}s and check Gmail (IMAP) for "
+            "Mail Delivery Subsystem bounces; bounces are deleted and the row is removed from Excel."
+        )
+    elif args.no_bounce_check:
+        print("Bounce check disabled (--no-bounce-check).")
+
     if not args.dry_run:
         if not sender or not app_password:
             raise SystemExit("Set GMAIL_ADDRESS and GMAIL_APP_PASSWORD in .env (see .env.example).")
@@ -362,6 +538,7 @@ def main() -> None:
             )
 
     sent = 0
+    bounced_rows: list[int] = []
     for pos, (idx, row) in enumerate(df.iterrows()):
         company = str(row[company_col]).strip()
         to_raw = str(row[email_col]).strip()
@@ -392,17 +569,47 @@ def main() -> None:
                 print("  Attachment: (none)")
             if mark_done:
                 print(f"  Would mark row {excel_row_1based} column {done_col_letter} = Done")
+            if bounce_check:
+                print(
+                    f"  Would wait {args.bounce_wait}s, check Gmail for bounce, "
+                    "delete bounce mail and remove row if delivery failed"
+                )
             print("  --- body preview ---")
             print(body[:500] + ("..." if len(body) > 500 else ""))
             print()
         else:
             row_ok = True
+            row_bounced = False
             for addr in addresses:
                 try:
+                    sent_at = datetime.now(timezone.utc)
                     send_gmail(sender, app_password, addr, subj, body, attach_path)
-                    sent += 1
                     print(f"Sent to {addr} ({company})")
-                    if args.delay > 0:
+                    if bounce_check:
+                        try:
+                            if find_and_delete_bounce(
+                                sender,
+                                app_password,
+                                addr,
+                                args.bounce_wait,
+                                sent_at,
+                            ):
+                                row_bounced = True
+                                row_ok = False
+                                bounced_rows.append(excel_row_1based)
+                                print(
+                                    f"  Delivery failed for {addr!r} — removed bounce from Gmail; "
+                                    f"will remove sheet row {excel_row_1based} ({company!r}) from Excel."
+                                )
+                                break
+                        except (imaplib.IMAP4.error, OSError) as exc:
+                            print(
+                                f"  Warning: could not check Gmail for bounce ({exc}). "
+                                "Enable IMAP in Gmail settings if needed."
+                            )
+                    if not row_bounced:
+                        sent += 1
+                    if args.delay > 0 and not row_bounced:
                         time.sleep(args.delay)
                 except (smtplib.SMTPException, OSError) as exc:
                     row_ok = False
@@ -419,6 +626,21 @@ def main() -> None:
                     )
                 except Exception as exc:
                     print(f"  Could not update Excel row {excel_row_1based}: {exc}")
+
+    if bounced_rows and not args.dry_run:
+        try:
+            remove_rows_from_sheet_bottom_up(args.excel.resolve(), bounced_rows)
+            print(
+                f"Removed {len(bounced_rows)} bounced row(s) from {args.excel.name}: "
+                f"rows {sorted(bounced_rows)}."
+            )
+        except PermissionError:
+            print(
+                f"Could not remove bounced rows from Excel (is {args.excel.name} open?). "
+                f"Delete these rows manually: {sorted(bounced_rows)}"
+            )
+        except Exception as exc:
+            print(f"Could not remove bounced rows from Excel: {exc}")
 
     if args.dry_run:
         print("Dry run complete; no messages were sent.")
